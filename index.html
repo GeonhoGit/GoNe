@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="app-version" content="0.1.0" />
+    <title>고누 마스터</title>
+    <link rel="stylesheet" href="styles.css?v=0.1.0" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">로컬 2인 대전</p>
+          <h1>고누 마스터</h1>
+        </div>
+        <div class="topbar-actions">
+          <button id="flipButton" class="icon-button" type="button" title="고누판 180도 회전">↕</button>
+          <button id="resetButton" class="primary-button" type="button">새 판</button>
+        </div>
+      </header>
+
+      <main class="game-layout">
+        <aside class="map-panel" aria-label="맵 선택">
+          <div class="panel-heading">
+            <h2>맵</h2>
+            <span id="mapCount"></span>
+          </div>
+          <div id="mapList" class="map-list"></div>
+        </aside>
+
+        <section class="board-section" aria-label="고누판">
+          <div class="status-strip">
+            <div>
+              <span class="label">현재 차례</span>
+              <strong id="turnLabel"></strong>
+              <small id="turnHint" class="turn-hint"></small>
+            </div>
+            <div>
+              <span class="label">턴</span>
+              <strong id="turnCount"></strong>
+            </div>
+            <div>
+              <span class="label">남은 시간</span>
+              <strong id="timerLabel"></strong>
+              <button id="kingJumpButton" class="secondary-button king-jump-button hidden" type="button">왕 점프</button>
+            </div>
+          </div>
+
+          <div class="board-wrap">
+            <svg id="boardSvg" viewBox="0 0 100 100" role="img" aria-label="고누 게임판"></svg>
+            <div id="resultBanner" class="result-banner hidden"></div>
+          </div>
+        </section>
+
+        <aside class="info-panel" aria-label="게임 정보">
+          <section class="info-block">
+            <h2 id="mapTitle"></h2>
+            <p id="mapDescription"></p>
+            <a id="videoLink" class="video-link" href="#" target="_blank" rel="noreferrer">참고 영상 열기</a>
+          </section>
+
+          <section class="info-block">
+            <h2>로컬 2인</h2>
+            <div class="player-form">
+              <label>
+                <span>아래 자리</span>
+                <input id="southNameInput" maxlength="12" autocomplete="off" />
+              </label>
+              <label>
+                <span>위 자리</span>
+                <input id="northNameInput" maxlength="12" autocomplete="off" />
+              </label>
+            </div>
+            <button id="swapSeatsButton" class="secondary-button" type="button">자리 바꾸기</button>
+          </section>
+
+          <section class="info-block compact">
+            <div class="score-row">
+              <span class="player-dot south"></span>
+              <span id="southNameLabel">아래</span>
+              <strong id="southPieces"></strong>
+            </div>
+            <div class="score-row">
+              <span class="player-dot north"></span>
+              <span id="northNameLabel">위</span>
+              <strong id="northPieces"></strong>
+            </div>
+          </section>
+
+          <section class="info-block">
+            <h2>규칙</h2>
+            <ul id="ruleList" class="rule-list"></ul>
+          </section>
+
+          <section class="info-block">
+            <h2>기록</h2>
+            <ol id="moveLog" class="move-log"></ol>
+          </section>
+        </aside>
+      </main>
+    </div>
+
+    <script src="app.js?v=0.1.0" defer></script>
+  </body>
+</html>
