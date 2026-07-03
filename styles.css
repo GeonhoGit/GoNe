@@ -46,6 +46,128 @@ button {
   padding: 20px;
 }
 
+.home-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background:
+    linear-gradient(90deg, rgba(121, 91, 52, 0.08) 1px, transparent 1px),
+    linear-gradient(rgba(121, 91, 52, 0.08) 1px, transparent 1px),
+    var(--bg);
+  background-size: 28px 28px;
+}
+
+.home-panel {
+  width: min(760px, 100%);
+  border: 1px solid rgba(34, 31, 26, 0.14);
+  border-radius: 8px;
+  padding: clamp(22px, 5vw, 40px);
+  background: rgba(255, 250, 240, 0.96);
+  box-shadow: var(--shadow);
+}
+
+.mode-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.mode-button,
+.difficulty-button {
+  border: 1px solid rgba(34, 31, 26, 0.16);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  transition:
+    transform 140ms ease,
+    border-color 140ms ease,
+    background 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.mode-button {
+  min-height: 118px;
+  padding: 16px;
+  text-align: left;
+}
+
+.mode-button strong {
+  display: block;
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.mode-button span {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.difficulty-panel {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.difficulty-button {
+  min-height: 46px;
+  padding: 0 14px;
+  background: #f6ead4;
+  font-weight: 900;
+}
+
+.mode-button:hover,
+.difficulty-button:hover {
+  transform: translateY(-1px);
+  border-color: var(--north);
+  background: #edf7f2;
+  box-shadow: 0 10px 24px rgba(52, 38, 18, 0.16);
+}
+
+.difficulty-button.locked,
+.map-card.locked {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.difficulty-button.locked:hover,
+.map-card.locked:hover {
+  transform: none;
+  border-color: rgba(34, 31, 26, 0.16);
+  background: var(--surface);
+  box-shadow: none;
+}
+
+.mode-label {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  border: 1px solid rgba(34, 31, 26, 0.14);
+  border-radius: 8px;
+  padding: 0 10px;
+  background: #f6ead4;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+.topbar-button {
+  width: auto;
+  min-width: 72px;
+  min-height: 34px;
+  margin-top: 0;
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -85,6 +207,12 @@ h2 {
   gap: 10px;
 }
 
+.topbar-actions > * {
+  flex-shrink: 0;
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
 .primary-button,
 .secondary-button,
 .icon-button,
@@ -107,6 +235,8 @@ h2 {
   background: var(--ink);
   color: var(--surface);
   font-weight: 800;
+  white-space: nowrap;
+  word-break: keep-all;
 }
 
 .secondary-button {
@@ -117,6 +247,16 @@ h2 {
   background: #f6ead4;
   color: var(--ink);
   font-weight: 800;
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+.secondary-button.topbar-button {
+  width: auto;
+  min-width: 72px;
+  min-height: 34px;
+  margin-top: 0;
+  padding: 0 10px;
 }
 
 .king-jump-button {
@@ -515,6 +655,18 @@ h2 {
   text-align: center;
 }
 
+.result-banner.centered {
+  inset: 50% auto auto 50%;
+  display: grid;
+  width: min(320px, calc(100% - 48px));
+  gap: 12px;
+  transform: translate(-50%, -50%);
+}
+
+.retry-button {
+  width: 100%;
+}
+
 .hidden {
   display: none;
 }
@@ -667,6 +819,11 @@ h2 {
 @media (max-width: 680px) {
   .app-shell {
     padding: 12px;
+  }
+
+  .mode-grid,
+  .difficulty-panel {
+    grid-template-columns: 1fr;
   }
 
   .topbar {

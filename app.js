@@ -9,6 +9,29 @@ const CAPTURE_FADE_MS = 280;
 const CAPTURE_ANIMATION_START_MS = PIECE_MOVE_MS + 80;
 const CAPTURE_GHOST_CLEAR_MS = CAPTURE_ANIMATION_START_MS + CAPTURE_FADE_MS + 80;
 const PLAYER_NAMES_KEY = "gonuLocalPlayerNames";
+const AI_PLAYER = "north";
+const HUMAN_PLAYER = "south";
+const AI_THINK_MS = 520;
+const CAREER_PROGRESS_KEY = "gonuCareerProgress";
+const CAREER_PROGRESS_VERSION = 2;
+const CAREER_DIFFICULTY_ORDER = ["easy", "normal", "hard"];
+const CAREER_EXCLUDED_MAP_IDS = new Set(["well"]);
+const AI_DIFFICULTIES = {
+  easy: { label: "쉬움", depth: 1, mistakeRate: 0.4, candidateLimit: 8 },
+  normal: { label: "보통", depth: 2, mistakeRate: 0.15, candidateLimit: 10 },
+  hard: { label: "어려움", depth: 4, mistakeRate: 0.03, candidateLimit: 12 },
+};
+const AI_MAP_DIFFICULTY_OVERRIDES = {
+  easy: {
+    well: { mistakeRate: 0.85 },
+  },
+  normal: {
+    well: { mistakeRate: 0.75 },
+  },
+  hard: {
+    well: { mistakeRate: 0.65 },
+  },
+};
 const KING_GONU_JUMP_LIMIT = 3;
 const KING_GONU_FIRST_PLAYER = "north";
 const KING_GONU_CONFIG = {
@@ -26,6 +49,15 @@ const KING_GONU_CONFIG = {
 };
 
 const dom = {
+  homeScreen: document.querySelector("#homeScreen"),
+  singleModeButton: document.querySelector("#singleModeButton"),
+  careerModeButton: document.querySelector("#careerModeButton"),
+  onlineModeButton: document.querySelector("#onlineModeButton"),
+  difficultyPanel: document.querySelector("#difficultyPanel"),
+  difficultyButtons: document.querySelectorAll(".difficulty-button"),
+  modeLabel: document.querySelector("#modeLabel"),
+  homeButton: document.querySelector("#homeButton"),
+  playerBlock: document.querySelector("#swapSeatsButton")?.closest(".info-block"),
   mapList: document.querySelector("#mapList"),
   mapCount: document.querySelector("#mapCount"),
   boardSvg: document.querySelector("#boardSvg"),
@@ -96,8 +128,12 @@ const maps = [
 let state = null;
 let activeMapId = maps[0].id;
 let timerId = null;
+let aiTimerId = null;
 let flipped = false;
 let playerNames = loadPlayerNames();
+let appMode = "local";
+let aiDifficulty = "normal";
+let careerProgress = loadCareerProgress();
 
 function createWellMap() {
   const nodes = [
@@ -223,7 +259,7 @@ function createWheelMap() {
     Array.from({ length: 4 }, (_, col) => `g-${row}-${col}`)
   );
   const gridPoint = (row, col, label) => node(gridIds[row][col], 25 + col * (50 / 3), 25 + row * (50 / 3), label);
-  const wheelOuterArcPath = (cx, cy, r, corner) => {
+  const wheelOuterArcPath = (cx, cy, r, corner, reverse = false) => {
     const points = {
       right: [cx + r, cy],
       bottom: [cx, cy + r],
@@ -236,8 +272,11 @@ function createWheelMap() {
       br: [points.left, points.top],
       bl: [points.top, points.right],
     };
-    const [start, end] = arcs[corner];
-    return `M ${start[0]} ${start[1]} A ${r} ${r} 0 1 0 ${end[0]} ${end[1]}`;
+    const [startPoint, endPoint] = arcs[corner];
+    const start = reverse ? endPoint : startPoint;
+    const end = reverse ? startPoint : endPoint;
+    const sweep = reverse ? 1 : 0;
+    return `M ${start[0]} ${start[1]} A ${r} ${r} 0 1 ${sweep} ${end[0]} ${end[1]}`;
   };
   const nodes = [];
   const edges = [];
@@ -256,10 +295,30 @@ function createWheelMap() {
   }
 
   const wheelPaths = [
-    { from: gridIds[0][1], to: gridIds[1][0], path: wheelOuterArcPath(25, 25, 16.67, "tl") },
-    { from: gridIds[1][3], to: gridIds[0][2], path: wheelOuterArcPath(75, 25, 16.67, "tr") },
-    { from: gridIds[3][2], to: gridIds[2][3], path: wheelOuterArcPath(75, 75, 16.67, "br") },
-    { from: gridIds[2][0], to: gridIds[3][1], path: wheelOuterArcPath(25, 75, 16.67, "bl") },
+    {
+      from: gridIds[0][1],
+      to: gridIds[1][0],
+      path: wheelOuterArcPath(25, 25, 16.67, "tl"),
+      reversePath: wheelOuterArcPath(25, 25, 16.67, "tl", true),
+    },
+    {
+      from: gridIds[1][3],
+      to: gridIds[0][2],
+      path: wheelOuterArcPath(75, 25, 16.67, "tr"),
+      reversePath: wheelOuterArcPath(75, 25, 16.67, "tr", true),
+    },
+    {
+      from: gridIds[3][2],
+      to: gridIds[2][3],
+      path: wheelOuterArcPath(75, 75, 16.67, "br"),
+      reversePath: wheelOuterArcPath(75, 75, 16.67, "br", true),
+    },
+    {
+      from: gridIds[2][0],
+      to: gridIds[3][1],
+      path: wheelOuterArcPath(25, 75, 16.67, "bl"),
+      reversePath: wheelOuterArcPath(25, 75, 16.67, "bl", true),
+    },
   ];
   const wheelTracks = wheelPaths.map((item) => [item.from, item.to]);
   const wheelVisuals = wheelPaths.map((item) => ({ from: item.from, to: item.to, path: item.path }));
@@ -285,14 +344,18 @@ function createWheelMap() {
       north: [gridIds[0][2], gridIds[0][3], gridIds[1][2], gridIds[1][3]],
       south: [gridIds[2][0], gridIds[2][1], gridIds[3][0], gridIds[3][1]],
     },
-    ruleSet: "wheelBlockade",
+    ruleSet: "wheelCapture",
     movement: "wheel",
     videoUrl: "https://youtu.be/UcIspN8Vzj0?si=mkTwJWiCY617NLu6",
     description: "4x4 격자판 네 모서리에 바퀴 궤도가 붙은 고누입니다.",
     rules: [
       "격자판에서는 선을 따라 상하좌우 한 칸 이동합니다.",
-      "바퀴 곡선에서는 한 번에 반대쪽 격자점으로 이동합니다.",
-      "상대 말 4개가 모두 움직일 수 없으면 승리합니다.",
+      "상대 말을 잡으려면 반드시 둥근 바퀴를 돌아야 합니다.",
+      "바퀴를 돌아 나오면 직선상으로 여러 칸을 이동할 수 있습니다.",
+      "바퀴를 돌아 나온 직선상에 상대 말이 있으면 그 말을 따낼 수 있습니다.",
+      "상대 말을 따내면 바퀴에서 나온 직선 방향으로 한 칸 더 이동합니다.",
+      "바퀴를 돌아 나온 직선상에 자기 말이 있으면 더 전진하지 못하고 멈춥니다.",
+      "상대 말을 모두 따내면 승리합니다.",
     ],
   };
 }
@@ -672,6 +735,10 @@ function buildInitialState(map) {
       north: map.initial.north.length,
     },
     pendingCapture: null,
+    mode: appMode,
+    aiDifficulty,
+    aiThinking: false,
+    careerProgressRecorded: false,
   };
 
   registerSignature(nextState);
@@ -679,21 +746,32 @@ function buildInitialState(map) {
 }
 
 function renderMapList() {
-  dom.mapCount.textContent = `${maps.length}종`;
+  const displayMaps = appMode === "career" ? getCareerMaps() : maps;
+  if (appMode === "career") {
+    const unlockedCount = displayMaps.filter((map) => isCareerMapUnlocked(map.id)).length;
+    dom.mapCount.textContent = `${unlockedCount}/${displayMaps.length} 해금`;
+  } else {
+    dom.mapCount.textContent = `${displayMaps.length}종`;
+  }
   dom.mapList.innerHTML = "";
 
-  for (const map of maps) {
+  for (const map of displayMaps) {
+    const locked = appMode === "career" && !isCareerMapUnlocked(map.id);
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `map-card${map.id === activeMapId ? " active" : ""}`;
+    button.className = `map-card${map.id === activeMapId ? " active" : ""}${locked ? " locked" : ""}`;
+    button.disabled = locked;
     button.dataset.map = map.id;
     const pieceSummary = map.ruleSet === "kingHunt"
       ? `왕 ${map.initial.north.length} · 졸 ${map.initial.south.length}`
       : map.ruleSet === "chamGonu"
         ? `말 ${map.reservePieces}개씩`
         : `말 ${map.initial.south.length}개씩`;
-    button.innerHTML = `<strong>${map.name}</strong><span>${map.category} · ${pieceSummary}</span>`;
+    button.innerHTML = locked
+      ? `<strong>${map.name}</strong><span>잠김 · 앞 맵 먼저 클리어</span>`
+      : `<strong>${map.name}</strong><span>${map.category} · ${pieceSummary}</span>`;
     button.addEventListener("click", () => {
+      if (locked) return;
       activeMapId = map.id;
       startGame(map.id);
     });
@@ -702,15 +780,19 @@ function renderMapList() {
 }
 
 function startGame(mapId = activeMapId) {
+  clearAiTimer();
   const map = maps.find((item) => item.id === mapId) || maps[0];
   activeMapId = map.id;
   state = buildInitialState(map);
   render();
   restartTimer();
+  scheduleAiTurn();
 }
 
 function render() {
   syncPlayerForm();
+  recordCareerResult();
+  renderDifficultyButtons();
   renderMapList();
   renderInfo();
   renderBoard();
@@ -735,6 +817,107 @@ function savePlayerNames() {
   window.localStorage.setItem(PLAYER_NAMES_KEY, JSON.stringify(playerNames));
 }
 
+function loadCareerProgress() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(CAREER_PROGRESS_KEY));
+    const source = saved?.version === CAREER_PROGRESS_VERSION ? saved.cleared : saved;
+    return CAREER_DIFFICULTY_ORDER.reduce((progress, difficulty) => {
+      const savedIndex = source?.[difficulty];
+      progress[difficulty] = saved?.version === CAREER_PROGRESS_VERSION
+        ? normalizeCareerIndex(savedIndex)
+        : normalizeLegacyCareerIndex(savedIndex);
+      return progress;
+    }, {});
+  } catch {
+    return CAREER_DIFFICULTY_ORDER.reduce((progress, difficulty) => {
+      progress[difficulty] = -1;
+      return progress;
+    }, {});
+  }
+}
+
+function saveCareerProgress() {
+  window.localStorage.setItem(CAREER_PROGRESS_KEY, JSON.stringify({
+    version: CAREER_PROGRESS_VERSION,
+    cleared: careerProgress,
+  }));
+}
+
+function normalizeCareerIndex(value) {
+  const index = Number(value);
+  if (!Number.isFinite(index)) return -1;
+  return Math.max(-1, Math.min(getCareerMaps().length - 1, Math.floor(index)));
+}
+
+function normalizeLegacyCareerIndex(value) {
+  const index = Number(value);
+  if (!Number.isFinite(index)) return -1;
+  return normalizeCareerIndex(Math.floor(index) - 1);
+}
+
+function getMapIndex(mapId) {
+  return getCareerMaps().findIndex((map) => map.id === mapId);
+}
+
+function getCareerMaps() {
+  return maps.filter((map) => !CAREER_EXCLUDED_MAP_IDS.has(map.id));
+}
+
+function getCareerClearedIndex(difficulty = aiDifficulty) {
+  return normalizeCareerIndex(careerProgress[difficulty]);
+}
+
+function isCareerDifficultyUnlocked(difficulty) {
+  const orderIndex = CAREER_DIFFICULTY_ORDER.indexOf(difficulty);
+  if (orderIndex <= 0) return true;
+
+  const previousDifficulty = CAREER_DIFFICULTY_ORDER[orderIndex - 1];
+  return getCareerClearedIndex(previousDifficulty) >= getCareerMaps().length - 1;
+}
+
+function getCareerUnlockedMapLimit(difficulty = aiDifficulty) {
+  if (!isCareerDifficultyUnlocked(difficulty)) return -1;
+  return Math.min(getCareerClearedIndex(difficulty) + 1, getCareerMaps().length - 1);
+}
+
+function isCareerMapUnlocked(mapId, difficulty = aiDifficulty) {
+  const mapIndex = getMapIndex(mapId);
+  return mapIndex >= 0 && mapIndex <= getCareerUnlockedMapLimit(difficulty);
+}
+
+function getCareerStartMapId(difficulty = aiDifficulty, preferredMapId = activeMapId) {
+  if (isCareerMapUnlocked(preferredMapId, difficulty)) return preferredMapId;
+  return getCareerMaps()[0]?.id || maps[0].id;
+}
+
+function recordCareerResult() {
+  if (appMode !== "career" || !state?.result || state.careerProgressRecorded) return;
+
+  state.careerProgressRecorded = true;
+  if (state.result.winner !== HUMAN_PLAYER) return;
+
+  const mapIndex = getMapIndex(state.map.id);
+  if (mapIndex < 0 || mapIndex > getCareerUnlockedMapLimit(aiDifficulty)) return;
+
+  const previous = getCareerClearedIndex(aiDifficulty);
+  if (mapIndex <= previous) return;
+
+  careerProgress[aiDifficulty] = mapIndex;
+  saveCareerProgress();
+}
+
+function renderDifficultyButtons() {
+  dom.difficultyButtons.forEach((button) => {
+    const difficulty = button.dataset.difficulty || "easy";
+    const unlocked = isCareerDifficultyUnlocked(difficulty);
+    const label = AI_DIFFICULTIES[difficulty].label;
+
+    button.disabled = !unlocked;
+    button.classList.toggle("locked", !unlocked);
+    button.textContent = unlocked ? label : `${label} 잠김`;
+  });
+}
+
 function updatePlayerName(player, value) {
   playerNames[player] = value.trim() || PLAYERS[player].label;
   savePlayerNames();
@@ -752,12 +935,25 @@ function syncPlayerForm() {
 }
 
 function getPlayerName(player) {
+  if (appMode === "career" && player === HUMAN_PLAYER) {
+    return "플레이어";
+  }
+  if (isAiMode() && player === AI_PLAYER) {
+    return `AI ${AI_DIFFICULTIES[aiDifficulty].label}`;
+  }
   return playerNames[player] || PLAYERS[player].label;
 }
 
 function getPieceShort(player) {
   const name = getPlayerName(player).trim();
   return name ? name.slice(0, 1) : PLAYERS[player].short;
+}
+
+function getModeLabel() {
+  if (appMode === "single") return `싱글 · ${AI_DIFFICULTIES[aiDifficulty].label}`;
+  if (appMode === "career") return `커리어 · ${AI_DIFFICULTIES[aiDifficulty].label}`;
+  if (appMode === "online") return "온라인 · 로컬";
+  return "로컬 2인";
 }
 
 function renderInfo() {
@@ -772,12 +968,17 @@ function renderInfo() {
       ? `${getPlayerName(state.pendingCapture.player)} 따낼 말 선택`
     : `${getPlayerName(state.currentPlayer)} (${PLAYERS[state.currentPlayer].label})`;
 
+  dom.modeLabel.textContent = getModeLabel();
   dom.turnLabel.textContent = state.result ? "종료" : turnName;
   dom.turnHint.textContent = state.result
     ? "새 판을 누르면 같은 자리로 다시 시작합니다."
     : getTurnHintText(isKingGonu);
   dom.turnCount.textContent = `${state.moveNumber}/${map.maxTurns}`;
-  dom.timerLabel.textContent = state.result ? "정지" : `${state.secondsLeft}s`;
+  dom.timerLabel.textContent = state.result
+    ? "정지"
+    : appMode === "career"
+      ? "제한 없음"
+      : `${state.secondsLeft}s`;
   dom.southNameLabel.textContent = getPlayerName("south");
   dom.northNameLabel.textContent = getPlayerName("north");
   dom.southPieces.textContent = isKingGonu
@@ -792,6 +993,7 @@ function renderInfo() {
       : `${northAlive}개`;
   dom.mapTitle.textContent = map.name;
   dom.mapDescription.textContent = map.description;
+  dom.playerBlock?.classList.toggle("hidden", appMode === "career");
   renderKingJumpControl(isKingGonu);
   if (map.videoUrl) {
     dom.videoLink.href = map.videoUrl;
@@ -815,14 +1017,49 @@ function renderInfo() {
   });
 
   if (state.result) {
-    dom.resultBanner.textContent = state.result.message;
+    dom.resultBanner.textContent = "";
+    dom.resultBanner.classList.toggle("centered", shouldShowRetryButton());
+
+    const message = document.createElement("div");
+    message.className = "result-message";
+    message.textContent = getDisplayResultMessage();
+    dom.resultBanner.appendChild(message);
+
+    if (shouldShowRetryButton()) {
+      const retryButton = document.createElement("button");
+      retryButton.type = "button";
+      retryButton.className = "primary-button retry-button";
+      retryButton.textContent = "다시하기";
+      retryButton.addEventListener("click", () => startGame(activeMapId));
+      dom.resultBanner.appendChild(retryButton);
+    }
+
     dom.resultBanner.classList.remove("hidden");
   } else {
+    dom.resultBanner.classList.remove("centered");
     dom.resultBanner.classList.add("hidden");
   }
 }
 
+function shouldShowRetryButton() {
+  if (!state?.result) return false;
+  if (!state.result.winner) return true;
+  return appMode === "career" && state.result.winner !== HUMAN_PLAYER;
+}
+
+function getDisplayResultMessage() {
+  if (!state?.result) return "";
+  if (appMode === "career" && state.result.winner === AI_PLAYER) {
+    return state.result.message.replaceAll("상대", "플레이어");
+  }
+  return state.result.message;
+}
+
 function getTurnHintText(isKingGonu) {
+  if (isAiTurn()) {
+    return `${getPlayerName(getTurnActor())} 생각 중입니다.`;
+  }
+
   if (state.pendingCapture) {
     return "3개 한 줄을 만들었습니다. 따낼 상대 말을 선택하세요.";
   }
@@ -861,7 +1098,9 @@ function renderKingJumpControl(isKingGonu) {
 function getDisplayRules(map) {
   const commonRules = [
     "공통: 같은 말 배치가 3회 나오면 무승부입니다.",
-    "공통: 한 턴은 30초이며 2회 연속 시간 초과 시 패배합니다.",
+    appMode === "career"
+      ? "커리어: 시간 제한과 시간 초과 패널티가 없습니다."
+      : "공통: 한 턴은 30초이며 2회 연속 시간 초과 시 패배합니다.",
   ];
 
   if (!map.allowBacktrack) {
@@ -870,8 +1109,36 @@ function getDisplayRules(map) {
 
   return [
     ...map.rules,
+    ...getWinConditionRules(map),
     ...commonRules,
   ];
+}
+
+function getWinConditionRules(map) {
+  if (map.ruleSet === "kingHunt") {
+    return [
+      "승리 방법: 왕은 졸을 모두 제거하면 이깁니다.",
+      "승리 방법: 졸은 왕의 일반 이동과 점프를 모두 막으면 이깁니다.",
+    ];
+  }
+
+  if (map.ruleSet === "chamGonu") {
+    return ["승리 방법: 상대 말이 2개 이하가 되거나 상대가 움직일 수 없게 만들면 이깁니다."];
+  }
+
+  if (map.ruleSet === "surroundCapture") {
+    return ["승리 방법: 상대 말을 2개 이하로 줄이거나 상대가 움직일 수 없게 만들면 이깁니다."];
+  }
+
+  if (map.ruleSet === "wheelCapture") {
+    return ["승리 방법: 바퀴를 돌아 상대 말을 모두 따내면 이깁니다."];
+  }
+
+  if (map.ruleSet === "sandwichGrid") {
+    return ["승리 방법: 상대 말을 1개 이하로 줄이거나 상대가 움직일 수 없게 만들면 이깁니다."];
+  }
+
+  return ["승리 방법: 상대 말을 모두 움직일 수 없게 만들면 이깁니다."];
 }
 
 function renderBoard() {
@@ -908,6 +1175,11 @@ function renderBoard() {
       .forEach((item) => validSet.add(item.id));
   }
   const capturableSet = new Set((state.lastMove ? [] : getCapturablePieces()).map((piece) => piece.id));
+  if (!state.lastMove) {
+    state.legalMoves
+      .filter((move) => move.capturePieceId)
+      .forEach((move) => capturableSet.add(move.capturePieceId));
+  }
 
   for (const item of state.map.nodes) {
     const classes = ["node"];
@@ -1066,6 +1338,14 @@ function easeMove(progress) {
 }
 
 function getMovePathForMove(from, to, fromNode, toNode) {
+  if (
+    state.lastMove?.path &&
+    state.lastMove.from === from &&
+    state.lastMove.to === to
+  ) {
+    return { from, to, path: state.lastMove.path };
+  }
+
   const targetKey = getEdgeKey(from, to);
   const customPath = (state.map.movePaths || []).find((item) => getEdgeKey(item.from, item.to) === targetKey);
   if (customPath) return customPath;
@@ -1133,6 +1413,7 @@ function getPieceRadius() {
 
 function handlePieceClick(pieceId) {
   if (state.result) return;
+  if (isAiTurn()) return;
   const piece = state.pieces.find((item) => item.id === pieceId);
   if (!piece || !piece.alive) return;
 
@@ -1142,7 +1423,11 @@ function handlePieceClick(pieceId) {
   }
 
   if (isChamPlacementTurn()) return;
-  if (piece.player !== state.currentPlayer) return;
+  if (piece.player !== state.currentPlayer) {
+    const captureMove = state.legalMoves.find((move) => move.capturePieceId === piece.id);
+    if (captureMove) applyMove(captureMove);
+    return;
+  }
 
   if (state.map.ruleSet === "kingHunt" && piece.player !== state.map.kingPlayer) {
     state.kingJumpMode = false;
@@ -1155,6 +1440,7 @@ function handlePieceClick(pieceId) {
 
 function handleNodeClick(nodeId) {
   if (state.result || state.pendingCapture) return;
+  if (isAiTurn()) return;
 
   if (isChamPlacementTurn()) {
     placeChamPiece(nodeId);
@@ -1168,6 +1454,8 @@ function handleNodeClick(nodeId) {
 }
 
 function toggleKingJumpMode() {
+  if (isAiTurn()) return;
+
   if (
     state.map.ruleSet !== "kingHunt" ||
     state.result ||
@@ -1198,6 +1486,7 @@ function applyMove(move, options = {}) {
     pieceId: piece.id,
     from,
     to: move.to,
+    path: move.path || null,
     animated: false,
   };
   piece.node = move.to;
@@ -1242,6 +1531,7 @@ function applyMove(move, options = {}) {
     playCaptureGhostsAfterMove(captureGhostToken);
   }
   restartTimer();
+  scheduleAiTurn();
 }
 
 function applyKingJumpUse(move) {
@@ -1280,6 +1570,7 @@ function placeChamPiece(nodeId, options = {}) {
     startPendingCapture(player);
     render();
     restartTimer();
+    scheduleAiTurn();
     return;
   }
 
@@ -1311,6 +1602,7 @@ function applyChamMove(piece, move, options = {}) {
     startPendingCapture(piece.player);
     render();
     restartTimer();
+    scheduleAiTurn();
     return;
   }
 
@@ -1364,6 +1656,7 @@ function finishTurn(movedPlayer, options = {}) {
     playCaptureGhostsAfterMove(options.captureGhostToken, options.captureDelay || 0);
   }
   restartTimer();
+  scheduleAiTurn();
 }
 
 function doesChamPieceMakeMill(piece) {
@@ -1451,6 +1744,10 @@ function resolveCaptures(piece, move = {}, fromNodeId = piece.node) {
     return resolveSurroundCaptures(piece);
   }
 
+  if (state.map.ruleSet === "wheelCapture") {
+    return resolveWheelCaptures(piece, move);
+  }
+
   if (state.map.ruleSet !== "sandwichGrid") return [];
   const captured = [];
   const [row, col] = parseGridNode(piece.node);
@@ -1475,6 +1772,22 @@ function resolveCaptures(piece, move = {}, fromNodeId = piece.node) {
   }
 
   return captured;
+}
+
+function resolveWheelCaptures(piece, move = {}) {
+  if (!move.capturePieceId) return [];
+
+  const captureNode = move.captureNode || move.to;
+  const capturedPiece = state.pieces.find((item) => (
+    item.id === move.capturePieceId &&
+    item.alive &&
+    item.player !== piece.player &&
+    item.node === captureNode
+  ));
+  if (!capturedPiece) return [];
+
+  capturedPiece.alive = false;
+  return [capturedPiece];
 }
 
 function resolveSurroundCaptures(piece) {
@@ -1583,6 +1896,24 @@ function evaluateEnd(movedPlayer) {
     return;
   }
 
+  if (state.map.ruleSet === "wheelCapture" && opponentPieces.length === 0) {
+    state.result = {
+      winner: movedPlayer,
+      message: `${getPlayerName(movedPlayer)} 승리 · 상대 말을 모두 따냈습니다.`,
+    };
+    return;
+  }
+
+  if (state.map.ruleSet === "wheelCapture") {
+    if (state.moveNumber > state.map.maxTurns) {
+      state.result = {
+        winner: null,
+        message: `무승부 · ${state.map.maxTurns}턴 제한에 도달했습니다.`,
+      };
+    }
+    return;
+  }
+
   if (state.map.ruleSet === "sandwichGrid" && opponentPieces.length <= 1) {
     state.result = {
       winner: movedPlayer,
@@ -1610,6 +1941,10 @@ function evaluateEnd(movedPlayer) {
 function evaluateStartOfTurn() {
   if (state.map.ruleSet === "kingHunt") {
     evaluateKingGonuEnd();
+    return;
+  }
+
+  if (state.map.ruleSet === "wheelCapture") {
     return;
   }
 
@@ -1769,6 +2104,7 @@ function getWheelMoves(piece) {
   const moves = new Map();
   const wheelEdges = new Set((state.map.wheelEdges || []).map(([from, to]) => getEdgeKey(from, to)));
 
+  // Ordinary moves stay one step. Captures are only created by wheel-turn moves below.
   for (const [from, to] of state.map.edges) {
     if (wheelEdges.has(getEdgeKey(from, to))) continue;
     const a = String(from);
@@ -1776,30 +2112,129 @@ function getWheelMoves(piece) {
     const target = a === piece.node ? b : b === piece.node ? a : null;
     if (!target || target === piece.previousNode || getPieceAt(target)) continue;
     if (respectsMapRules(piece, target)) {
-      moves.set(target, { pieceId: piece.id, from: piece.node, to: target });
+      moves.set(`move:${target}`, { pieceId: piece.id, from: piece.node, to: target });
     }
   }
 
-  for (const track of state.map.wheelTracks || []) {
-    const index = track.indexOf(piece.node);
-    if (index < 0) continue;
+  for (const wheelPath of state.map.wheelPaths || []) {
+    const entry = String(piece.node);
+    const exit = getWheelExitNode(wheelPath, entry);
+    if (!exit || exit === piece.previousNode) continue;
 
-    for (const direction of [-1, 1]) {
-      let nextIndex = index + direction;
-      if (track[nextIndex] === piece.previousNode) continue;
-
-      while (nextIndex >= 0 && nextIndex < track.length) {
-        const nodeId = track[nextIndex];
-        if (getPieceAt(nodeId)) break;
-        if (respectsMapRules(piece, nodeId)) {
-          moves.set(nodeId, { pieceId: piece.id, from: piece.node, to: nodeId });
-        }
-        nextIndex += direction;
-      }
-    }
+    addWheelRunMoves(moves, piece, wheelPath, exit);
   }
 
-  return Array.from(moves.values());
+  return Array.from(moves.values()).sort((a, b) => Number(Boolean(b.capturePieceId)) - Number(Boolean(a.capturePieceId)));
+}
+
+function getWheelExitNode(wheelPath, entryNodeId) {
+  if (String(wheelPath.from) === String(entryNodeId)) return String(wheelPath.to);
+  if (String(wheelPath.to) === String(entryNodeId)) return String(wheelPath.from);
+  return null;
+}
+
+function addWheelRunMoves(moves, piece, wheelPath, exitNodeId) {
+  const startNode = piece.node;
+  const direction = getWheelExitDirection(exitNodeId);
+  if (!direction) return;
+
+  const arcPath = getWheelArcMovePath(startNode, exitNodeId, wheelPath);
+  const nodes = [exitNodeId, ...getStraightNodesFrom(exitNodeId, direction)];
+
+  for (let index = 0; index < nodes.length; index += 1) {
+    const nodeId = nodes[index];
+    const blockingPiece = getPieceAt(nodeId);
+    const movePath = appendStraightPathToWheelPath(arcPath, exitNodeId, nodeId);
+
+    if (!blockingPiece) {
+      moves.set(`move:${nodeId}`, {
+        pieceId: piece.id,
+        from: startNode,
+        to: nodeId,
+        path: movePath,
+        wheelTurn: true,
+      });
+      continue;
+    }
+
+    if (blockingPiece.player !== piece.player) {
+      const landingNodeId = getWheelCaptureLandingNode(nodes, index);
+      if (!landingNodeId || getPieceAt(landingNodeId)) break;
+
+      moves.set(`capture:${landingNodeId}:${blockingPiece.id}`, {
+        pieceId: piece.id,
+        from: startNode,
+        to: landingNodeId,
+        path: appendStraightPathToWheelPath(movePath, nodeId, landingNodeId),
+        wheelTurn: true,
+        captureNode: nodeId,
+        capturePieceId: blockingPiece.id,
+      });
+    }
+    break;
+  }
+}
+
+function getWheelCaptureLandingNode(straightNodes, captureIndex) {
+  return straightNodes[captureIndex + 1] || null;
+}
+
+function getStraightNodesFrom(nodeId, direction) {
+  const [row, col] = parseWheelNode(nodeId);
+  const nodes = [];
+  let currentNode = nodeId;
+  let nextRow = row + direction[0];
+  let nextCol = col + direction[1];
+
+  while (nextRow >= 0 && nextRow < 4 && nextCol >= 0 && nextCol < 4) {
+    const nextNode = wheelGridNode(nextRow, nextCol);
+    if (!getNodeMaybe(nextNode)) break;
+    if (!hasOrdinaryWheelLine(currentNode, nextNode)) break;
+    nodes.push(nextNode);
+    currentNode = nextNode;
+    nextRow += direction[0];
+    nextCol += direction[1];
+  }
+
+  return nodes;
+}
+
+function hasOrdinaryWheelLine(fromNodeId, toNodeId) {
+  const key = getEdgeKey(fromNodeId, toNodeId);
+  const wheelEdges = new Set((state.map.wheelEdges || []).map(([from, to]) => getEdgeKey(from, to)));
+  if (wheelEdges.has(key)) return false;
+  return state.map.edges.some(([from, to]) => getEdgeKey(from, to) === key);
+}
+
+function getWheelExitDirection(nodeId) {
+  const [row, col] = parseWheelNode(nodeId);
+  if (!Number.isInteger(row) || !Number.isInteger(col)) return null;
+
+  if (row === 0) return [1, 0];
+  if (row === 3) return [-1, 0];
+  if (col === 0) return [0, 1];
+  if (col === 3) return [0, -1];
+  return null;
+}
+
+function getWheelArcMovePath(fromNodeId, exitNodeId, wheelPath) {
+  if (String(wheelPath.from) === String(fromNodeId) && String(wheelPath.to) === String(exitNodeId)) {
+    return wheelPath.path;
+  }
+  if (String(wheelPath.to) === String(fromNodeId) && String(wheelPath.from) === String(exitNodeId)) {
+    return wheelPath.reversePath || wheelPath.path;
+  }
+
+  const fromNode = getNode(fromNodeId);
+  const exitNode = getNode(exitNodeId);
+  const radius = wheelPath.radius || 16.67;
+  return `M ${fromNode.x} ${fromNode.y} A ${radius} ${radius} 0 1 0 ${exitNode.x} ${exitNode.y}`;
+}
+
+function appendStraightPathToWheelPath(path, exitNodeId, targetNodeId) {
+  if (String(exitNodeId) === String(targetNodeId)) return path;
+  const target = getNode(targetNodeId);
+  return `${path} L ${target.x} ${target.y}`;
 }
 
 function isFirstCenterMoveBlocked(piece) {
@@ -1910,6 +2345,11 @@ function parseGridNode(nodeId) {
   return String(nodeId).split("-").map(Number);
 }
 
+function parseWheelNode(nodeId) {
+  const [, row, col] = String(nodeId).split("-");
+  return [Number(row), Number(col)];
+}
+
 function parseKingNode(nodeId) {
   const [, row, col] = String(nodeId).split("-");
   return [Number(row), Number(col)];
@@ -1927,9 +2367,17 @@ function gridNode(row, col) {
   return `${row}-${col}`;
 }
 
+function wheelGridNode(row, col) {
+  return `g-${row}-${col}`;
+}
+
 function restartTimer() {
   if (timerId) window.clearInterval(timerId);
   if (!state || state.result) return;
+  if (appMode === "career") {
+    renderInfo();
+    return;
+  }
 
   timerId = window.setInterval(() => {
     state.secondsLeft -= 1;
@@ -1942,6 +2390,7 @@ function restartTimer() {
 }
 
 function handleTimeout() {
+  if (appMode === "career") return;
   if (timerId) window.clearInterval(timerId);
   const player = state.currentPlayer;
   state.timeoutStreak[player] += 1;
@@ -1993,6 +2442,380 @@ function handleTimeout() {
   applyMove(move, { timeout: true });
 }
 
+function clearAiTimer() {
+  if (aiTimerId) {
+    window.clearTimeout(aiTimerId);
+    aiTimerId = null;
+  }
+  if (state) state.aiThinking = false;
+}
+
+function getTurnActor() {
+  return state?.pendingCapture?.player || state?.currentPlayer;
+}
+
+function isAiTurn() {
+  return isAiMode() && state && !state.result && getTurnActor() === AI_PLAYER;
+}
+
+function isAiMode() {
+  return appMode === "career" || appMode === "single";
+}
+
+function scheduleAiTurn(delay = AI_THINK_MS) {
+  if (aiTimerId) window.clearTimeout(aiTimerId);
+  if (!isAiTurn()) return;
+
+  const animationDelay = state.lastMove ? PIECE_MOVE_MS + 120 : 0;
+  const captureDelay = state.capturedGhosts?.length ? CAPTURE_FADE_MS + 120 : 0;
+  const wait = Math.max(delay, animationDelay, captureDelay);
+
+  state.aiThinking = true;
+  renderInfo();
+  aiTimerId = window.setTimeout(runAiTurn, wait);
+}
+
+function runAiTurn() {
+  aiTimerId = null;
+  if (!isAiTurn()) return;
+
+  if (state.lastMove) {
+    scheduleAiTurn(120);
+    return;
+  }
+
+  const action = chooseAiAction();
+  state.aiThinking = false;
+  if (!action) return;
+
+  if (action.type === "capture") {
+    const piece = state.pieces.find((item) => item.id === action.pieceId);
+    if (piece) handlePendingCapture(piece);
+    return;
+  }
+
+  if (action.type === "placement") {
+    placeChamPiece(action.nodeId, { ai: true });
+    return;
+  }
+
+  applyMove(action.move, { ai: true });
+}
+
+function chooseAiAction() {
+  const actor = getTurnActor();
+  const actions = getAiActions(actor);
+  if (!actions.length) return null;
+
+  const config = getAiConfig();
+  if (Math.random() < config.mistakeRate) {
+    return pickRandom(actions);
+  }
+
+  const candidates = config.depth <= 1
+    ? actions
+    : rankActionsForSearch(actions, actor, config.candidateLimit * 2);
+  const scored = candidates.map((action) => ({
+    action,
+    score: scoreAiAction(action, actor, config.depth, config.candidateLimit),
+  })).sort((a, b) => b.score - a.score);
+
+  const bestScore = scored[0].score;
+  const bestActions = scored.filter((item) => item.score >= bestScore - 0.001).map((item) => item.action);
+  return pickRandom(bestActions);
+}
+
+function getAiConfig() {
+  const base = AI_DIFFICULTIES[aiDifficulty] || AI_DIFFICULTIES.normal;
+  const override = AI_MAP_DIFFICULTY_OVERRIDES[aiDifficulty]?.[state.map.id];
+  return override ? { ...base, ...override } : base;
+}
+
+function getAiActions(actor) {
+  if (!state || state.result) return [];
+
+  if (state.pendingCapture) {
+    if (state.pendingCapture.player !== actor) return [];
+    return getCapturablePieces().map((piece) => ({ type: "capture", pieceId: piece.id }));
+  }
+
+  if (actor !== state.currentPlayer) return [];
+
+  if (isChamPlacementTurn()) {
+    return state.map.nodes
+      .filter((item) => !getPieceAt(item.id))
+      .map((item) => ({ type: "placement", nodeId: item.id }));
+  }
+
+  return getAlivePieces(actor).flatMap((piece) =>
+    getLegalMoves(piece).map((move) => ({ type: "move", move }))
+  );
+}
+
+function scoreAiAction(action, aiPlayer, depth, candidateLimit) {
+  const nextState = getSimulatedStateAfterAction(action);
+  if (!nextState) return Number.NEGATIVE_INFINITY;
+
+  return withTemporaryState(nextState, () => {
+    if (depth <= 1 || state.result) return evaluateAiState(aiPlayer);
+    return minimaxAi(depth - 1, aiPlayer, candidateLimit, Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY);
+  });
+}
+
+function minimaxAi(depth, aiPlayer, candidateLimit, alpha, beta) {
+  if (depth <= 0 || state.result) return evaluateAiState(aiPlayer);
+
+  const actor = getTurnActor();
+  const actions = getAiActions(actor);
+  if (!actions.length) return evaluateAiState(aiPlayer);
+
+  const maximizing = actor === aiPlayer;
+  const candidates = rankActionsForSearch(actions, actor, candidateLimit);
+
+  if (maximizing) {
+    let best = Number.NEGATIVE_INFINITY;
+    for (const action of candidates) {
+      best = Math.max(best, scoreAiAction(action, aiPlayer, depth, candidateLimit));
+      alpha = Math.max(alpha, best);
+      if (beta <= alpha) break;
+    }
+    return best;
+  }
+
+  let best = Number.POSITIVE_INFINITY;
+  for (const action of candidates) {
+    best = Math.min(best, scoreAiAction(action, aiPlayer, depth, candidateLimit));
+    beta = Math.min(beta, best);
+    if (beta <= alpha) break;
+  }
+  return best;
+}
+
+function rankActionsForSearch(actions, actor, limit) {
+  return [...actions]
+    .map((action) => ({ action, score: getQuickActionScore(action, actor) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((item) => item.action);
+}
+
+function getQuickActionScore(action, actor) {
+  if (action.type === "capture") {
+    const piece = state.pieces.find((item) => item.id === action.pieceId);
+    return 120 + getAiPieceValue(piece, actor) + getNodeScore(piece?.node);
+  }
+
+  if (action.type === "placement") {
+    return getNodeScore(action.nodeId);
+  }
+
+  const move = action.move;
+  return getNodeScore(move.to) + (move.jump ? 24 : 0);
+}
+
+function getSimulatedStateAfterAction(action) {
+  const nextState = cloneStateForAi(state);
+  return withTemporaryState(nextState, () => {
+    applyAiActionToSimulation(action);
+    return nextState;
+  });
+}
+
+function cloneStateForAi(source) {
+  return {
+    ...source,
+    pieces: source.pieces.map((piece) => ({ ...piece })),
+    legalMoves: [],
+    log: [...source.log],
+    signatures: new Map(source.signatures),
+    timeoutStreak: { ...source.timeoutStreak },
+    lastMove: null,
+    capturedGhosts: [],
+    placedCounts: { ...source.placedCounts },
+    pendingCapture: source.pendingCapture ? { ...source.pendingCapture } : null,
+    result: source.result ? { ...source.result } : null,
+    aiThinking: false,
+  };
+}
+
+function withTemporaryState(nextState, callback) {
+  const previousState = state;
+  state = nextState;
+  try {
+    return callback();
+  } finally {
+    state = previousState;
+  }
+}
+
+function applyAiActionToSimulation(action) {
+  const actor = getTurnActor();
+
+  if (action.type === "capture") {
+    const piece = state.pieces.find((item) => item.id === action.pieceId && item.alive);
+    if (!piece || !state.pendingCapture || piece.player !== state.pendingCapture.opponent) return;
+    piece.alive = false;
+    state.pendingCapture = null;
+    finishSimulatedTurn(actor);
+    return;
+  }
+
+  if (action.type === "placement") {
+    if (!isChamPlacementTurn() || getPieceAt(action.nodeId) || !getNodeMaybe(action.nodeId)) return;
+    const player = state.currentPlayer;
+    const pieceNumber = state.placedCounts[player] + 1;
+    const piece = {
+      id: `${player}-${pieceNumber}`,
+      player,
+      node: String(action.nodeId),
+      alive: true,
+      leftHome: false,
+      previousNode: null,
+    };
+    state.pieces.push(piece);
+    state.placedCounts[player] += 1;
+    state.moveNumber += 1;
+    if (doesChamPieceMakeMill(piece)) captureBestSimulatedPiece(player);
+    finishSimulatedTurn(player);
+    return;
+  }
+
+  const piece = state.pieces.find((item) => item.id === action.move.pieceId && item.alive);
+  if (!piece) return;
+
+  const from = piece.node;
+  piece.node = action.move.to;
+  piece.previousNode = from;
+  state.moveNumber += 1;
+
+  if (state.map.ruleSet === "chamGonu") {
+    if (doesChamPieceMakeMill(piece)) captureBestSimulatedPiece(piece.player);
+    finishSimulatedTurn(piece.player);
+    return;
+  }
+
+  updateHomeStatus(piece, from, action.move.to);
+  applyKingJumpUse(action.move);
+  resolveCaptures(piece, action.move, from);
+  finishSimulatedTurn(piece.player);
+}
+
+function captureBestSimulatedPiece(player) {
+  const opponent = PLAYERS[player].next;
+  const victim = getAlivePieces(opponent)
+    .sort((a, b) => getAiPieceValue(b, player) - getAiPieceValue(a, player))[0];
+  if (victim) victim.alive = false;
+}
+
+function finishSimulatedTurn(movedPlayer) {
+  state.selectedPieceId = null;
+  state.legalMoves = [];
+  state.kingJumpMode = false;
+  state.pendingCapture = null;
+
+  evaluateEnd(movedPlayer);
+  if (!state.result) {
+    switchTurn();
+    registerSignature(state);
+    evaluateStartOfTurn();
+  }
+}
+
+function evaluateAiState(aiPlayer) {
+  if (state.result) {
+    if (!state.result.winner) return 0;
+    return state.result.winner === aiPlayer ? 100000 : -100000;
+  }
+
+  if (state.map.ruleSet === "kingHunt") {
+    return evaluateKingAiState(aiPlayer);
+  }
+
+  const opponent = PLAYERS[aiPlayer].next;
+  const aiAlive = getAlivePieces(aiPlayer).length;
+  const opponentAlive = getAlivePieces(opponent).length;
+  const reserveScore = state.map.ruleSet === "chamGonu"
+    ? (getChamReserveLeft(aiPlayer) - getChamReserveLeft(opponent)) * 18
+    : 0;
+  const mobilityScore = (countPlayerMoves(aiPlayer) - countPlayerMoves(opponent)) * 5;
+  const positionScore = getPositionScore(aiPlayer) - getPositionScore(opponent);
+
+  return (aiAlive - opponentAlive) * 90 + reserveScore + mobilityScore + positionScore;
+}
+
+function evaluateKingAiState(aiPlayer) {
+  const king = getKingPiece();
+  const soldierCount = getAlivePieces(state.map.soldierPlayer).length;
+  const kingMobility = king ? getKingNormalMoves(king).length : 0;
+  const removedSoldiers = state.map.initial[state.map.soldierPlayer].length - soldierCount;
+
+  if (aiPlayer === state.map.kingPlayer) {
+    return removedSoldiers * 120 + state.kingJumpsLeft * 35 + kingMobility * 12;
+  }
+
+  return soldierCount * 30 - state.kingJumpsLeft * 40 - kingMobility * 18;
+}
+
+function countPlayerMoves(player) {
+  return getAlivePieces(player).reduce((total, piece) => total + getLegalMoves(piece).length, 0);
+}
+
+function getPositionScore(player) {
+  return getAlivePieces(player).reduce((total, piece) => total + getNodeScore(piece.node), 0);
+}
+
+function getNodeScore(nodeId) {
+  const item = getNodeMaybe(nodeId);
+  if (!item) return 0;
+  const distance = Math.hypot(item.x - 50, item.y - 50);
+  return Math.max(0, 40 - distance);
+}
+
+function getAiPieceValue(piece, perspectivePlayer) {
+  if (!piece) return 0;
+  if (state.map.ruleSet === "kingHunt" && piece.player === state.map.kingPlayer) return 900;
+  if (piece.player === perspectivePlayer) return 100;
+  return 100;
+}
+
+function pickRandom(items) {
+  return items[Math.floor(Math.random() * items.length)];
+}
+
+function openHomeScreen() {
+  clearAiTimer();
+  appMode = "local";
+  dom.difficultyPanel.classList.add("hidden");
+  dom.homeScreen.classList.remove("hidden");
+  if (state) renderInfo();
+}
+
+function startSelectedMode(mode, difficulty = aiDifficulty) {
+  clearAiTimer();
+  if (mode === "career" && !isCareerDifficultyUnlocked(difficulty)) return;
+
+  appMode = mode;
+  aiDifficulty = difficulty;
+  if (mode === "career") {
+    activeMapId = getCareerStartMapId(difficulty);
+  }
+  dom.homeScreen.classList.add("hidden");
+  startGame(activeMapId);
+}
+
+dom.singleModeButton.addEventListener("click", () => {
+  dom.difficultyPanel.classList.add("hidden");
+  startSelectedMode("local");
+});
+dom.difficultyButtons.forEach((button) => {
+  button.addEventListener("click", () => startSelectedMode("career", button.dataset.difficulty || "normal"));
+});
+dom.careerModeButton.addEventListener("click", () => {
+  renderDifficultyButtons();
+  dom.difficultyPanel.classList.toggle("hidden");
+});
+dom.onlineModeButton.addEventListener("click", () => startSelectedMode("online"));
+dom.homeButton.addEventListener("click", openHomeScreen);
 dom.resetButton.addEventListener("click", () => startGame(activeMapId));
 dom.kingJumpButton?.addEventListener("click", toggleKingJumpMode);
 dom.flipButton.addEventListener("click", () => {

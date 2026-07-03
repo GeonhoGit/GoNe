@@ -3,11 +3,37 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="app-version" content="0.1.0" />
+    <meta name="app-version" content="0.1.1" />
     <title>고누 마스터</title>
-    <link rel="stylesheet" href="styles.css?v=0.1.0" />
+    <link rel="stylesheet" href="styles.css?v=0.1.1" />
   </head>
   <body>
+    <div id="homeScreen" class="home-screen">
+      <section class="home-panel" aria-label="메인 화면">
+        <p class="eyebrow">고누 마스터</p>
+        <h1>고누 마스터</h1>
+        <div class="mode-grid">
+          <button id="singleModeButton" class="mode-button" type="button">
+            <strong>로컬모드</strong>
+            <span>친구와 대전</span>
+          </button>
+          <button id="careerModeButton" class="mode-button" type="button">
+            <strong>커리어 모드</strong>
+            <span>혼자 진행</span>
+          </button>
+          <button id="onlineModeButton" class="mode-button" type="button">
+            <strong>온라인 모드</strong>
+            <span>로컬 대전</span>
+          </button>
+        </div>
+        <div id="difficultyPanel" class="difficulty-panel hidden">
+          <button class="difficulty-button" type="button" data-difficulty="easy">쉬움</button>
+          <button class="difficulty-button" type="button" data-difficulty="normal">보통</button>
+          <button class="difficulty-button" type="button" data-difficulty="hard">어려움</button>
+        </div>
+      </section>
+    </div>
+
     <div class="app-shell">
       <header class="topbar">
         <div>
@@ -15,6 +41,8 @@
           <h1>고누 마스터</h1>
         </div>
         <div class="topbar-actions">
+          <span id="modeLabel" class="mode-label">로컬 2인</span>
+          <button id="homeButton" class="secondary-button topbar-button" type="button">메인</button>
           <button id="flipButton" class="icon-button" type="button" title="고누판 180도 회전">↕</button>
           <button id="resetButton" class="primary-button" type="button">새 판</button>
         </div>
@@ -101,6 +129,6 @@
       </main>
     </div>
 
-    <script src="app.js?v=0.1.0" defer></script>
+    <script src="app.js?v=0.1.1" defer></script>
   </body>
 </html>
