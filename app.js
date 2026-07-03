@@ -9,6 +9,9 @@ const CAPTURE_FADE_MS = 280;
 const CAPTURE_ANIMATION_START_MS = PIECE_MOVE_MS + 80;
 const CAPTURE_GHOST_CLEAR_MS = CAPTURE_ANIMATION_START_MS + CAPTURE_FADE_MS + 80;
 const PLAYER_NAMES_KEY = "gonuLocalPlayerNames";
+const ONLINE_SERVER_URL = location.protocol === "https:"
+  ? `wss://${location.host}`
+  : `ws://${location.host || "127.0.0.1:5173"}`;
 const DEFAULT_PLAYER_NAMES = {
   south: "1번 플레이어",
   north: "2번 플레이어",
@@ -59,6 +62,11 @@ const dom = {
   onlineModeButton: document.querySelector("#onlineModeButton"),
   difficultyPanel: document.querySelector("#difficultyPanel"),
   difficultyButtons: document.querySelectorAll(".difficulty-button"),
+  onlinePanel: document.querySelector("#onlinePanel"),
+  onlineCreateRoomButton: document.querySelector("#onlineCreateRoomButton"),
+  onlineJoinRoomButton: document.querySelector("#onlineJoinRoomButton"),
+  onlineRoomInput: document.querySelector("#onlineRoomInput"),
+  onlineHomeStatus: document.querySelector("#onlineHomeStatus"),
   modeLabel: document.querySelector("#modeLabel"),
   homeButton: document.querySelector("#homeButton"),
   playerBlock: document.querySelector("#swapSeatsButton")?.closest(".info-block"),
@@ -137,6 +145,7 @@ let playerNames = loadPlayerNames();
 let appMode = "local";
 let aiDifficulty = "normal";
 let careerProgress = loadCareerProgress();
+let onlineSession = createEmptyOnlineSession();
 
 function createWellMap() {
   const nodes = [
@@ -792,7 +801,7 @@ function renderMapList() {
   }
 }
 
-function startGame(mapId = activeMapId) {
+function startGame(mapId = activeMapId, options = {}) {
   clearAiTimer();
   const map = maps.find((item) => item.id === mapId) || maps[0];
   activeMapId = map.id;
@@ -800,6 +809,10 @@ function startGame(mapId = activeMapId) {
   render();
   restartTimer();
   scheduleAiTurn();
+  if (appMode === "online" && onlineSession.connected && !options.remote) {
+    sendOnlineStart(map.id);
+    if (onlineSession.ready) syncOnlineState();
+  }
 }
 
 function render() {
@@ -971,7 +984,12 @@ function getPieceShort(player) {
 function getModeLabel() {
   if (appMode === "single") return `싱글 · ${AI_DIFFICULTIES[aiDifficulty].label}`;
   if (appMode === "career") return `커리어 · ${AI_DIFFICULTIES[aiDifficulty].label}`;
-  if (appMode === "online") return "온라인 · 로컬";
+  if (appMode === "online") {
+    const playerLabel = onlineSession.player ? PLAYERS[onlineSession.player].label : "대기";
+    return onlineSession.roomCode
+      ? `온라인 · ${onlineSession.roomCode} · ${playerLabel}`
+      : "온라인 · 연결 전";
+  }
   return "로컬 2인";
 }
 
@@ -1075,6 +1093,12 @@ function getDisplayResultMessage() {
 }
 
 function getTurnHintText(isKingGonu) {
+  if (isOnlineWaitingForPeer()) {
+    return "친구가 같은 방에 들어오면 시작됩니다.";
+  }
+  if (isOnlineTurnBlocked()) {
+    return "상대 차례입니다. 상대가 둘 때까지 기다리세요.";
+  }
   if (isAiTurn()) {
     return `${getPlayerName(getTurnActor())} 생각 중입니다.`;
   }
@@ -1432,7 +1456,7 @@ function getPieceRadius() {
 
 function handlePieceClick(pieceId) {
   if (state.result) return;
-  if (isAiTurn()) return;
+  if (isBoardInputBlocked()) return;
   const piece = state.pieces.find((item) => item.id === pieceId);
   if (!piece || !piece.alive) return;
 
@@ -1459,7 +1483,7 @@ function handlePieceClick(pieceId) {
 
 function handleNodeClick(nodeId) {
   if (state.result || state.pendingCapture) return;
-  if (isAiTurn()) return;
+  if (isBoardInputBlocked()) return;
 
   if (isChamPlacementTurn()) {
     placeChamPiece(nodeId);
@@ -1473,7 +1497,7 @@ function handleNodeClick(nodeId) {
 }
 
 function toggleKingJumpMode() {
-  if (isAiTurn()) return;
+  if (isBoardInputBlocked()) return;
 
   if (
     state.map.ruleSet !== "kingHunt" ||
@@ -1551,6 +1575,7 @@ function applyMove(move, options = {}) {
   }
   restartTimer();
   scheduleAiTurn();
+  if (!options.remote) syncOnlineState();
 }
 
 function applyKingJumpUse(move) {
@@ -1590,6 +1615,7 @@ function placeChamPiece(nodeId, options = {}) {
     render();
     restartTimer();
     scheduleAiTurn();
+    if (!options.remote) syncOnlineState();
     return;
   }
 
@@ -1622,6 +1648,7 @@ function applyChamMove(piece, move, options = {}) {
     render();
     restartTimer();
     scheduleAiTurn();
+    if (!options.remote) syncOnlineState();
     return;
   }
 
@@ -1676,6 +1703,7 @@ function finishTurn(movedPlayer, options = {}) {
   }
   restartTimer();
   scheduleAiTurn();
+  if (!options.remote) syncOnlineState();
 }
 
 function doesChamPieceMakeMill(piece) {
@@ -2446,6 +2474,10 @@ function restartTimer() {
     renderInfo();
     return;
   }
+  if (appMode === "online" && isOnlineTurnBlocked()) {
+    renderInfo();
+    return;
+  }
 
   timerId = window.setInterval(() => {
     state.secondsLeft -= 1;
@@ -2489,6 +2521,7 @@ function handleTimeout() {
       message: `${getPlayerName(winner)} 승리 · 상대가 2회 연속 시간 초과했습니다.`,
     };
     render();
+    syncOnlineState();
     return;
   }
 
@@ -2503,11 +2536,288 @@ function handleTimeout() {
       message: `${getPlayerName(winner)} 승리 · 시간 초과 시 이동할 수가 없습니다.`,
     };
     render();
+    syncOnlineState();
     return;
   }
 
   const move = movable[Math.floor(Math.random() * movable.length)];
   applyMove(move, { timeout: true });
+}
+
+function createEmptyOnlineSession() {
+  return {
+    socket: null,
+    connected: false,
+    ready: false,
+    roomCode: "",
+    player: null,
+    applyingRemote: false,
+  };
+}
+
+function showOnlinePanel() {
+  dom.difficultyPanel.classList.add("hidden");
+  dom.onlinePanel.classList.toggle("hidden");
+  setOnlineHomeStatus("온라인 서버를 켠 뒤 방을 만들거나 참가하세요.");
+}
+
+function setOnlineHomeStatus(message) {
+  if (dom.onlineHomeStatus) dom.onlineHomeStatus.textContent = message;
+}
+
+function connectOnlineSocket() {
+  if (onlineSession.socket?.readyState === WebSocket.OPEN) {
+    return Promise.resolve();
+  }
+
+  if (onlineSession.socket) {
+    onlineSession.socket.close();
+  }
+
+  setOnlineHomeStatus("온라인 서버에 연결 중입니다...");
+
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(ONLINE_SERVER_URL);
+    onlineSession.socket = socket;
+
+    socket.addEventListener("open", () => {
+      onlineSession.connected = true;
+      setOnlineHomeStatus("서버에 연결되었습니다.");
+      resolve();
+    }, { once: true });
+
+    socket.addEventListener("message", (event) => {
+      try {
+        handleOnlineMessage(JSON.parse(event.data));
+      } catch {
+        setOnlineHomeStatus("서버 메시지를 읽지 못했습니다.");
+      }
+    });
+
+    socket.addEventListener("close", () => {
+      onlineSession.connected = false;
+      onlineSession.ready = false;
+      if (appMode === "online") {
+        renderInfo();
+      }
+      setOnlineHomeStatus("온라인 서버와 연결이 끊겼습니다.");
+    });
+
+    socket.addEventListener("error", () => {
+      setOnlineHomeStatus("온라인 서버에 연결할 수 없습니다. online-server.cjs를 먼저 실행하세요.");
+      reject(new Error("online server unavailable"));
+    }, { once: true });
+  });
+}
+
+async function createOnlineRoom() {
+  try {
+    await connectOnlineSocket();
+    sendOnlineMessage({
+      type: "create_room",
+      mapId: activeMapId,
+    });
+  } catch {
+    // Status text is already updated in connectOnlineSocket.
+  }
+}
+
+async function joinOnlineRoom() {
+  const roomCode = dom.onlineRoomInput.value.trim().toUpperCase();
+  if (!roomCode) {
+    setOnlineHomeStatus("참가할 방 코드를 입력하세요.");
+    return;
+  }
+
+  try {
+    await connectOnlineSocket();
+    sendOnlineMessage({
+      type: "join_room",
+      roomCode,
+    });
+  } catch {
+    // Status text is already updated in connectOnlineSocket.
+  }
+}
+
+function handleOnlineMessage(message) {
+  if (message.type === "connected") {
+    setOnlineHomeStatus("서버에 연결되었습니다.");
+    return;
+  }
+
+  if (message.type === "room_joined") {
+    onlineSession.roomCode = message.roomCode;
+    onlineSession.player = message.player;
+    onlineSession.ready = Number(message.players) >= 2 || Boolean(message.snapshot);
+    dom.onlineRoomInput.value = message.roomCode;
+    setOnlineHomeStatus(`${message.roomCode} 방에 입장했습니다. ${PLAYERS[message.player].label} 플레이어입니다.`);
+    dom.homeScreen.classList.add("hidden");
+    appMode = "online";
+
+    if (message.snapshot) {
+      restoreOnlineState(message.snapshot);
+    } else {
+      startGame(message.mapId || activeMapId, { remote: true });
+    }
+    return;
+  }
+
+  if (message.type === "room_ready") {
+    onlineSession.roomCode = message.roomCode || onlineSession.roomCode;
+    onlineSession.ready = Number(message.players) >= 2;
+    setOnlineHomeStatus(`${onlineSession.roomCode} 방이 준비되었습니다.`);
+    if (appMode !== "online" || state?.map?.id !== message.mapId) {
+      appMode = "online";
+      dom.homeScreen.classList.add("hidden");
+      startGame(message.mapId || activeMapId, { remote: true });
+    } else {
+      render();
+      restartTimer();
+    }
+    return;
+  }
+
+  if (message.type === "start_game") {
+    onlineSession.ready = true;
+    appMode = "online";
+    dom.homeScreen.classList.add("hidden");
+    startGame(message.mapId || activeMapId, { remote: true });
+    return;
+  }
+
+  if (message.type === "state_sync") {
+    onlineSession.ready = true;
+    restoreOnlineState(message.snapshot);
+    return;
+  }
+
+  if (message.type === "peer_left") {
+    onlineSession.ready = false;
+    setOnlineHomeStatus("상대가 방을 나갔습니다. 같은 방 코드를 다시 공유하세요.");
+    if (appMode === "online") renderInfo();
+    return;
+  }
+
+  if (message.type === "error") {
+    setOnlineHomeStatus(message.message || "온라인 오류가 발생했습니다.");
+  }
+}
+
+function sendOnlineStart(mapId) {
+  sendOnlineMessage({
+    type: "start_game",
+    roomCode: onlineSession.roomCode,
+    mapId,
+  });
+}
+
+function syncOnlineState() {
+  if (
+    appMode !== "online" ||
+    onlineSession.applyingRemote ||
+    !onlineSession.ready ||
+    !state
+  ) {
+    return;
+  }
+
+  sendOnlineMessage({
+    type: "state_sync",
+    roomCode: onlineSession.roomCode,
+    mapId: state.map.id,
+    snapshot: serializeOnlineState(),
+  });
+}
+
+function sendOnlineMessage(message) {
+  if (onlineSession.socket?.readyState !== WebSocket.OPEN) return;
+  onlineSession.socket.send(JSON.stringify(message));
+}
+
+function serializeOnlineState() {
+  return {
+    mapId: state.map.id,
+    pieces: state.pieces.map((piece) => ({ ...piece })),
+    currentPlayer: state.currentPlayer,
+    selectedPieceId: state.selectedPieceId,
+    legalMoves: state.legalMoves.map((move) => ({ ...move })),
+    moveNumber: state.moveNumber,
+    result: state.result ? { ...state.result } : null,
+    log: [...state.log],
+    signatures: Array.from(state.signatures.entries()),
+    secondsLeft: state.secondsLeft,
+    timeoutStreak: { ...state.timeoutStreak },
+    lastMove: state.lastMove ? { ...state.lastMove } : null,
+    kingJumpsLeft: state.kingJumpsLeft,
+    kingJumpMode: state.kingJumpMode,
+    capturedGhosts: state.capturedGhosts.map((ghost) => ({ ...ghost })),
+    captureGhostToken: state.captureGhostToken,
+    placedCounts: { ...state.placedCounts },
+    pendingCapture: state.pendingCapture ? { ...state.pendingCapture } : null,
+    playerNames: { ...playerNames },
+  };
+}
+
+function restoreOnlineState(snapshot) {
+  if (!snapshot) return;
+  const map = maps.find((item) => item.id === snapshot.mapId) || maps[0];
+  activeMapId = map.id;
+  onlineSession.applyingRemote = true;
+  playerNames = { ...DEFAULT_PLAYER_NAMES, ...snapshot.playerNames };
+  state = {
+    ...snapshot,
+    map,
+    pieces: (snapshot.pieces || []).map((piece) => ({ ...piece })),
+    selectedPieceId: snapshot.selectedPieceId || null,
+    legalMoves: (snapshot.legalMoves || []).map((move) => ({ ...move })),
+    result: snapshot.result ? { ...snapshot.result } : null,
+    log: [...(snapshot.log || [])],
+    signatures: new Map(snapshot.signatures || []),
+    secondsLeft: Number.isFinite(snapshot.secondsLeft) ? snapshot.secondsLeft : TURN_SECONDS,
+    timeoutStreak: { south: 0, north: 0, ...(snapshot.timeoutStreak || {}) },
+    lastMove: snapshot.lastMove ? { ...snapshot.lastMove } : null,
+    kingJumpsLeft: Number.isFinite(snapshot.kingJumpsLeft) ? snapshot.kingJumpsLeft : 0,
+    kingJumpMode: Boolean(snapshot.kingJumpMode),
+    capturedGhosts: (snapshot.capturedGhosts || []).map((ghost) => ({ ...ghost })),
+    captureGhostToken: Number.isFinite(snapshot.captureGhostToken) ? snapshot.captureGhostToken : 0,
+    placedCounts: { south: 0, north: 0, ...(snapshot.placedCounts || {}) },
+    pendingCapture: snapshot.pendingCapture ? { ...snapshot.pendingCapture } : null,
+    mode: appMode,
+    aiDifficulty,
+    aiThinking: false,
+    careerProgressRecorded: false,
+  };
+  render();
+  if (state.capturedGhosts?.length) {
+    playCaptureGhostsAfterMove(state.captureGhostToken);
+  }
+  restartTimer();
+  onlineSession.applyingRemote = false;
+}
+
+function disconnectOnline() {
+  if (onlineSession.socket?.readyState === WebSocket.OPEN) {
+    sendOnlineMessage({ type: "leave_room", roomCode: onlineSession.roomCode });
+    onlineSession.socket.close();
+  }
+  onlineSession = createEmptyOnlineSession();
+}
+
+function isOnlineWaitingForPeer() {
+  return appMode === "online" && !onlineSession.ready;
+}
+
+function isOnlineTurnBlocked() {
+  return appMode === "online" && (
+    !onlineSession.ready ||
+    !onlineSession.player ||
+    getTurnActor() !== onlineSession.player
+  );
+}
+
+function isBoardInputBlocked() {
+  return isAiTurn() || isOnlineTurnBlocked();
 }
 
 function clearAiTimer() {
@@ -2852,8 +3162,10 @@ function pickRandom(items) {
 
 function openHomeScreen() {
   clearAiTimer();
+  if (appMode === "online") disconnectOnline();
   appMode = "local";
   dom.difficultyPanel.classList.add("hidden");
+  dom.onlinePanel.classList.add("hidden");
   dom.homeScreen.classList.remove("hidden");
   if (state) renderInfo();
 }
@@ -2861,18 +3173,21 @@ function openHomeScreen() {
 function startSelectedMode(mode, difficulty = aiDifficulty) {
   clearAiTimer();
   if (mode === "career" && !isCareerDifficultyUnlocked(difficulty)) return;
+  if (mode !== "online" && appMode === "online") disconnectOnline();
 
   appMode = mode;
   aiDifficulty = difficulty;
   if (mode === "career") {
     activeMapId = getCareerStartMapId(difficulty);
   }
+  dom.onlinePanel.classList.add("hidden");
   dom.homeScreen.classList.add("hidden");
   startGame(activeMapId);
 }
 
 dom.singleModeButton.addEventListener("click", () => {
   dom.difficultyPanel.classList.add("hidden");
+  dom.onlinePanel.classList.add("hidden");
   startSelectedMode("local");
 });
 dom.difficultyButtons.forEach((button) => {
@@ -2880,9 +3195,15 @@ dom.difficultyButtons.forEach((button) => {
 });
 dom.careerModeButton.addEventListener("click", () => {
   renderDifficultyButtons();
+  dom.onlinePanel.classList.add("hidden");
   dom.difficultyPanel.classList.toggle("hidden");
 });
-dom.onlineModeButton.addEventListener("click", () => startSelectedMode("online"));
+dom.onlineModeButton.addEventListener("click", showOnlinePanel);
+dom.onlineCreateRoomButton.addEventListener("click", createOnlineRoom);
+dom.onlineJoinRoomButton.addEventListener("click", joinOnlineRoom);
+dom.onlineRoomInput.addEventListener("input", () => {
+  dom.onlineRoomInput.value = dom.onlineRoomInput.value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+});
 dom.homeButton.addEventListener("click", openHomeScreen);
 dom.resetButton.addEventListener("click", () => startGame(activeMapId));
 dom.kingJumpButton?.addEventListener("click", toggleKingJumpMode);

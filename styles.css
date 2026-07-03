@@ -123,6 +123,48 @@ button {
   font-weight: 900;
 }
 
+.online-panel {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid rgba(34, 31, 26, 0.12);
+  border-radius: 8px;
+  background: rgba(246, 234, 212, 0.72);
+}
+
+.online-actions {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.75fr) minmax(120px, 1fr) minmax(120px, 0.75fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.online-actions .primary-button,
+.online-actions .secondary-button {
+  margin-top: 0;
+  min-height: 44px;
+}
+
+.online-actions input {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid rgba(34, 31, 26, 0.18);
+  border-radius: 8px;
+  padding: 0 12px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.online-status {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
 .mode-button:hover,
 .difficulty-button:hover {
   transform: translateY(-1px);
@@ -825,7 +867,8 @@ h2 {
   }
 
   .mode-grid,
-  .difficulty-panel {
+  .difficulty-panel,
+  .online-actions {
     grid-template-columns: 1fr;
   }
 
