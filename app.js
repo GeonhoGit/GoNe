@@ -242,13 +242,19 @@ function createHobakMap() {
       north: ["rt", "rm", "rb"],
       south: ["lt", "lm", "lb"],
     },
+    homeEntrances: {
+      north: "cr",
+      south: "cl",
+    },
     ruleSet: "homeBlockade",
+    allowBacktrack: true,
     videoUrl: "https://www.youtube.com/watch?v=OHQfHw9hmBY",
     description: "좌우 집에서 나와 가운데 원형 광장에서 길을 막는 호박고누입니다.",
     rules: [
       "선을 따라 빈 교차점으로 한 칸 이동합니다.",
       "자기 집을 나온 말은 다시 자기 집으로 들어갈 수 없습니다.",
       "상대 집에는 들어갈 수 없습니다.",
+      "출발선의 입구가 막히면 그 출발선에 남은 상대 말은 포위된 것으로 봅니다.",
       "상대 말 3개가 모두 움직일 수 없으면 승리합니다.",
     ],
   };
@@ -790,12 +796,19 @@ function startGame(mapId = activeMapId) {
 }
 
 function render() {
+  evaluateImmediateTurnLoss();
   syncPlayerForm();
   recordCareerResult();
   renderDifficultyButtons();
   renderMapList();
   renderInfo();
   renderBoard();
+}
+
+function evaluateImmediateTurnLoss() {
+  if (!state || state.result || state.pendingCapture) return;
+  if (state.map.ruleSet !== "homeBlockade") return;
+  evaluateStartOfTurn();
 }
 
 function loadPlayerNames() {
@@ -2018,6 +2031,8 @@ function getBoardSignature(nextState) {
 }
 
 function getLegalMoves(piece) {
+  if (!pieceCountsAsMovable(piece)) return [];
+
   if (state.map.movement === "kingGonu") {
     return getKingGonuMoves(piece);
   }
@@ -2294,7 +2309,23 @@ function playerHasMove(player) {
     return getChamReserveLeft(player) > 0 && state.map.nodes.some((nodeItem) => !getPieceAt(nodeItem.id));
   }
 
-  return getAlivePieces(player).some((piece) => getLegalMoves(piece).length > 0);
+  return getAlivePieces(player).some((piece) => pieceCountsAsMovable(piece) && getLegalMoves(piece).length > 0);
+}
+
+function pieceCountsAsMovable(piece) {
+  if (state.map.ruleSet !== "homeBlockade") return true;
+  return !isPieceTrappedInBlockedHome(piece);
+}
+
+function isPieceTrappedInBlockedHome(piece) {
+  const homeNodes = state.map.homeZones?.[piece.player]?.map(String) || [];
+  if (!homeNodes.includes(piece.node)) return false;
+
+  const entranceNode = state.map.homeEntrances?.[piece.player];
+  if (!entranceNode) return false;
+
+  const entrancePiece = getPieceAt(entranceNode);
+  return Boolean(entrancePiece && entrancePiece.player !== piece.player);
 }
 
 function getAlivePieces(player) {
