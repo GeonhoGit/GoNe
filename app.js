@@ -1,6 +1,6 @@
 const PLAYERS = {
-  south: { id: "south", label: "아래", short: "아", next: "north" },
-  north: { id: "north", label: "위", short: "위", next: "south" },
+  south: { id: "south", label: "1번", short: "1", next: "north" },
+  north: { id: "north", label: "2번", short: "2", next: "south" },
 };
 
 const TURN_SECONDS = 30;
@@ -9,6 +9,10 @@ const CAPTURE_FADE_MS = 280;
 const CAPTURE_ANIMATION_START_MS = PIECE_MOVE_MS + 80;
 const CAPTURE_GHOST_CLEAR_MS = CAPTURE_ANIMATION_START_MS + CAPTURE_FADE_MS + 80;
 const PLAYER_NAMES_KEY = "gonuLocalPlayerNames";
+const DEFAULT_PLAYER_NAMES = {
+  south: "1번 플레이어",
+  north: "2번 플레이어",
+};
 const AI_PLAYER = "north";
 const HUMAN_PLAYER = "south";
 const AI_THINK_MS = 520;
@@ -119,7 +123,6 @@ const maps = [
     category: "최고급",
     capture: "sandwich",
     movement: "slideOrthogonal",
-    initialOrientation: "sides",
     videoUrl: "https://www.youtube.com/watch?v=L8A59cA56pU",
     description: "8x8 격자판에서 각자 8개씩 첫 줄에 놓고 여러 칸을 움직이며, 샌드위치로 상대 말을 따내는 대형 고누입니다.",
   }),
@@ -513,6 +516,10 @@ function createChamMap() {
     ["o-rm", "m-rm", "i-rm"],
     ["o-bm", "m-bm", "i-bm"],
     ["o-lm", "m-lm", "i-lm"],
+    ["o-tl", "m-tl", "i-tl"],
+    ["o-tr", "m-tr", "i-tr"],
+    ["o-br", "m-br", "i-br"],
+    ["o-bl", "m-bl", "i-bl"],
   ];
 
   return {
@@ -535,9 +542,9 @@ function createChamMap() {
     description: "빈 3중 사각형 판에 말을 놓고, 3개 한 줄을 만들면 상대 말을 하나 따내는 고누입니다.",
     rules: [
       "처음에는 빈 교차점에 각자 12개 말을 번갈아 하나씩 놓습니다.",
-      "자기 말 3개가 한 선에 놓이면 상대 말 하나를 선택해 따냅니다.",
+      "자기 말 3개가 한 선이나 모서리 대각선에 놓이면 상대 말 하나를 선택해 따냅니다.",
       "모든 말을 놓은 뒤에는 선으로 연결된 빈 교차점으로 한 칸 이동합니다.",
-      "이동해서 다시 3개 한 줄을 만들면 상대 말 하나를 따냅니다.",
+      "이동해서 다시 3개 한 줄이나 대각선을 만들면 상대 말 하나를 따냅니다.",
       "상대의 남은 말이 2개 이하가 되거나 상대가 움직일 수 없으면 승리합니다.",
     ],
   };
@@ -814,15 +821,14 @@ function evaluateImmediateTurnLoss() {
 function loadPlayerNames() {
   try {
     const saved = JSON.parse(window.localStorage.getItem(PLAYER_NAMES_KEY));
+    const southName = saved?.south === "아래 플레이어" ? DEFAULT_PLAYER_NAMES.south : saved?.south;
+    const northName = saved?.north === "위 플레이어" ? DEFAULT_PLAYER_NAMES.north : saved?.north;
     return {
-      south: saved?.south || "아래 플레이어",
-      north: saved?.north || "위 플레이어",
+      south: southName || DEFAULT_PLAYER_NAMES.south,
+      north: northName || DEFAULT_PLAYER_NAMES.north,
     };
   } catch {
-    return {
-      south: "아래 플레이어",
-      north: "위 플레이어",
-    };
+    return { ...DEFAULT_PLAYER_NAMES };
   }
 }
 
@@ -932,7 +938,7 @@ function renderDifficultyButtons() {
 }
 
 function updatePlayerName(player, value) {
-  playerNames[player] = value.trim() || PLAYERS[player].label;
+  playerNames[player] = value.trim() || DEFAULT_PLAYER_NAMES[player] || PLAYERS[player].label;
   savePlayerNames();
   renderInfo();
   renderBoard();
@@ -1117,7 +1123,7 @@ function getDisplayRules(map) {
   ];
 
   if (!map.allowBacktrack) {
-    commonRules.unshift("공통: 직전 위치로 바로 되돌아갈 수 없습니다.");
+    commonRules.unshift("공통: 직전 위치로 바로 되돌아갈 수 없습니다. 단, 다른 이동이 전혀 없으면 직전 위치로 이동할 수 있습니다.");
   }
 
   return [
@@ -1954,6 +1960,7 @@ function evaluateEnd(movedPlayer) {
 function evaluateStartOfTurn() {
   if (state.map.ruleSet === "kingHunt") {
     evaluateKingGonuEnd();
+    enableKingJumpIfNormalMovesBlocked();
     return;
   }
 
@@ -1990,6 +1997,23 @@ function evaluateKingGonuEnd() {
       message: "졸 승리 · 왕의 일반 이동과 점프가 모두 막혔습니다.",
     };
   }
+}
+
+function enableKingJumpIfNormalMovesBlocked() {
+  if (
+    state.result ||
+    state.currentPlayer !== state.map.kingPlayer ||
+    state.kingJumpsLeft <= 0
+  ) {
+    return;
+  }
+
+  const king = getKingPiece();
+  if (!king || getKingNormalMoves(king).length > 0) return;
+
+  state.kingJumpMode = true;
+  state.selectedPieceId = king.id;
+  state.legalMoves = getKingJumpMoves(king);
 }
 
 function isKingTrapped() {
@@ -2046,11 +2070,14 @@ function getLegalMoves(piece) {
   }
 
   const neighbors = getNeighbors(piece.node);
-  const moves = neighbors
+  const candidateMoves = neighbors
     .filter((nodeId) => !getPieceAt(nodeId))
-    .filter((nodeId) => state.map.allowBacktrack || nodeId !== piece.previousNode)
     .filter((nodeId) => respectsMapRules(piece, nodeId))
     .map((nodeId) => ({ pieceId: piece.id, from: piece.node, to: nodeId }));
+  const normalMoves = state.map.allowBacktrack
+    ? candidateMoves
+    : candidateMoves.filter((move) => move.to !== piece.previousNode);
+  const moves = normalMoves.length ? normalMoves : getForcedBacktrackMoves(piece, candidateMoves);
 
   if (isFirstCenterMoveBlocked(piece)) {
     return moves.filter((move) => move.to !== "c");
@@ -2267,25 +2294,35 @@ function getSlidingGridMoves(piece) {
     [0, -1],
   ];
   const moves = [];
+  const backtrackCandidates = [];
 
   for (const [dr, dc] of directions) {
     let nextRow = row + dr;
     let nextCol = col + dc;
-    const firstNode = gridNode(nextRow, nextCol);
-    if (firstNode === piece.previousNode) continue;
 
     while (nextRow >= 0 && nextRow < state.map.gridSize && nextCol >= 0 && nextCol < state.map.gridSize) {
       const nodeId = gridNode(nextRow, nextCol);
       if (getPieceAt(nodeId)) break;
-      if (nodeId !== piece.previousNode && respectsMapRules(piece, nodeId)) {
-        moves.push({ pieceId: piece.id, from: piece.node, to: nodeId });
+      if (respectsMapRules(piece, nodeId)) {
+        const move = { pieceId: piece.id, from: piece.node, to: nodeId };
+        if (!state.map.allowBacktrack && nodeId === piece.previousNode) {
+          backtrackCandidates.push(move);
+        } else {
+          moves.push(move);
+        }
       }
       nextRow += dr;
       nextCol += dc;
     }
   }
 
-  return moves;
+  return moves.length ? moves : getForcedBacktrackMoves(piece, backtrackCandidates);
+}
+
+function getForcedBacktrackMoves(piece, candidates) {
+  if (state.map.allowBacktrack || !piece.previousNode || candidates.length !== 1) return [];
+  const [move] = candidates;
+  return move.to === piece.previousNode ? [move] : [];
 }
 
 function respectsMapRules(piece, targetNode) {
